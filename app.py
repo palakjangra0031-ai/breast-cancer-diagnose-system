@@ -1,185 +1,155 @@
-"""
-app.py
-------
-FastAPI server exposing two REST endpoints:
+# app.py
 
-  POST /chat   — accepts a user message, returns a bot reply + metadata
-  GET  /logs   — returns paginated interaction logs from the SQLite DB
+import os
+import joblib
+import traceback
+import numpy as np
+import gradio as gr
+import tensorflow as tf
 
-Run with:
-    uvicorn app:app --reload --port 8000
+# ==========================================================
+# Load the Scaler and TensorFlow Model
+# ==========================================================
+try:
+    scaler = joblib.load('breast_cancer_scaler.pkl')
+    deployed_nn = tf.keras.models.load_model('breast_cancer_model.h5')
+    print("Scaler and Deep Learning Model loaded successfully!")
+except Exception as e:
+    print(f"Warning: Files not found or error loading. {e}")
+    scaler = None
+    deployed_nn = None
 
-Auto-generated docs are available at:
-    http://localhost:8000/docs   (Swagger UI)
-    http://localhost:8000/redoc (ReDoc)
-"""
+# ==========================================================
+# Prediction Function with Bulletproof Error Handling
+# ==========================================================
+def predict_cancer(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10):
+    
+    # 1. Capture the 10 user-provided Mean features from Sliders
+    user_mean_features = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10]
 
-from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Optional
+    # 2. Hardcoded Error features
+    preassumed_error_features = [
+        0.2204,    # radius error mode
+        0.8561,    # texture error mode
+        1.778,     # perimeter error mode
+        16.64,     # area error mode
+        0.005080,  # smoothness error mode
+        0.01104,   # compactness error mode
+        0.0,       # concavity error mode
+        0.0,       # concave points error mode
+        0.01344,   # symmetry error mode
+        0.001784   # fractal dimension error mode
+    ]
 
-from fastapi import FastAPI, Depends, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+    # --- CODE BLOCK: UPDATED WORST FEATURES (CHANGES MADE HERE) ---
+    # 3. Hardcoded Worst features using the actual dataset modes you provided
+    preassumed_worst_features = [
+        12.36,    # worst radius mode
+        17.70,    # worst texture mode 
+        101.7,    # worst perimeter mode 
+        284.4,    # worst area mode 
+        0.1216,   # worst smoothness mode
+        0.1486,   # worst compactness mode
+        0.0,      # worst concavity mode
+        0.0,      # worst concave points mode
+        0.2226,   # worst symmetry mode
+        0.07427   # worst fractal dimension mode
+    ]
+    # --------------------------------------------------------------
 
-from database import init_db, get_db, log_interaction, InteractionLog
-from nlp_engine import NLPEngine
+    # 4. Combine all arrays to perfectly match the 30 features the neural network expects
+    full_30_features = user_mean_features + preassumed_error_features + preassumed_worst_features
 
-# ---------------------------------------------------------------------------
-# Application lifespan — load heavy resources once at startup
-# ---------------------------------------------------------------------------
+    # Model execution
+    if deployed_nn is None or scaler is None:
+        return "❌ Server Error: Model or Scaler failed to load. Check your repository files."
 
-nlp: NLPEngine  # module-level reference populated in lifespan
+    try:
+        # Convert the full row of 30 features into a 2D NumPy array
+        input_array = np.array([full_30_features])
 
+        # Apply scaling before prediction
+        scaled_input = scaler.transform(input_array)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup: initialise DB tables and load the NLP model."""
-    global nlp
-    init_db()
-    nlp = NLPEngine()
-    print("[app] Startup complete — API is ready.")
-    yield
-    # Shutdown: nothing special needed for SQLite / HF pipeline
-    print("[app] Shutting down.")
+        # Get the prediction probability
+        prediction_prob = deployed_nn.predict(scaled_input)[0][0]
 
+        # Scikit-learn Breast Cancer target mapping: 0 = Malignant, 1 = Benign
+        if prediction_prob >= 0.5:
+            return (
+                f"🟢 Assessment Result (Confidence: {prediction_prob:.2%})\n\n"
+                "Classification: BENIGN\n\n"
+                "The cell characteristics suggest a non-cancerous tumor."
+            )
+        else:
+            malignant_confidence = 1 - prediction_prob
+            return (
+                f"🔴 Assessment Result (Confidence: {malignant_confidence:.2%})\n\n"
+                "Classification: MALIGNANT\n\n"
+                "The cell characteristics indicate a high risk of cancer. Please consult an oncologist immediately."
+            )
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print("RUNTIME ERROR:\n", error_trace)
+        return f"❌ Prediction failed due to an internal error.\n\nDEBUG INFO:\n{error_trace}"
 
-app = FastAPI(
-    title="AI Customer Support Bot",
-    description="FAQ chatbot powered by DistilBERT with interaction logging.",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+# ==========================================================
+# Interface Setup (Enhanced Slider Layout)
+# ==========================================================
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="teal", neutral_hue="slate")) as app:
+    
+    gr.Markdown("<h1 style='text-align: center;'>🔬 Breast Cancer Detection System</h1>")
+    gr.Markdown("<p style='text-align: center;'>Adjust the basic medical metrics below. Advanced metrics are automatically calculated.</p>")
+    gr.Markdown("---")
 
-# --- CORS -------------------------------------------------------------------
-# In production, replace "*" with your exact frontend origin, e.g.
-# ["https://yourapp.com"] to prevent cross-site abuse.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    with gr.Row():
+        with gr.Column():
+            f1 = gr.Slider(minimum=0, maximum=40, step=0.1, value=14.0, label="Mean Radius")
+            f2 = gr.Slider(minimum=0, maximum=50, step=0.1, value=19.0, label="Mean Texture")
+            f3 = gr.Slider(minimum=0, maximum=200, step=1.0, value=90.0, label="Mean Perimeter")
+            f4 = gr.Slider(minimum=0, maximum=3000, step=10.0, value=650.0, label="Mean Area")
+            f5 = gr.Slider(minimum=0.0, maximum=0.2, step=0.001, value=0.09, label="Mean Smoothness")
+        
+        with gr.Column():
+            f6 = gr.Slider(minimum=0.0, maximum=0.5, step=0.001, value=0.1, label="Mean Compactness")
+            f7 = gr.Slider(minimum=0.0, maximum=0.5, step=0.001, value=0.08, label="Mean Concavity")
+            f8 = gr.Slider(minimum=0.0, maximum=0.25, step=0.001, value=0.04, label="Mean Concave Points")
+            f9 = gr.Slider(minimum=0.0, maximum=0.5, step=0.001, value=0.18, label="Mean Symmetry")
+            f10 = gr.Slider(minimum=0.0, maximum=0.15, step=0.001, value=0.06, label="Mean Fractal Dimension")
 
-# Serve the static frontend (index.html, etc.) from the /static directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
+    # Output Section
+    gr.Markdown("---")
+    with gr.Row():
+        submit_btn = gr.Button("Run Neural Network Analysis", variant="primary", size="lg")
+        clear_btn = gr.ClearButton(size="lg")
+    
+    with gr.Row():
+        result_box = gr.Textbox(label="Deep Learning Assessment Result", lines=5, interactive=False)
 
+    # Footer
+    gr.Markdown("""
+    ---
+    ### 👨‍💻 About the Developer
+    **Created by:** Palak
+    * **Branch:** B Tech CSE 
+    * **roll no.:** 28240272
+    * **College name:** Panipat Institute of Engineering and Technology
+    """)
 
-# ---------------------------------------------------------------------------
-# Pydantic schemas
-# ---------------------------------------------------------------------------
+    # Wire up the logic mapped only to the 10 visible sliders
+    input_components = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10]
+    
+    submit_btn.click(fn=predict_cancer, inputs=input_components, outputs=result_box)
+    clear_btn.add(input_components + [result_box])
 
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=500, example="How do I reset my password?")
-
-
-class ChatResponse(BaseModel):
-    reply: str
-    confidence: Optional[float] = None   # None when the fallback is triggered
-    source: str                           # "faq_exact" | "faq_fuzzy" | "model" | "fallback"
-    status: str                           # "answered" | "fallback"
-    log_id: int                           # DB row ID for tracing
-
-
-class LogEntry(BaseModel):
-    id: int
-    timestamp: datetime
-    user_query: str
-    bot_response: str
-    confidence_score: Optional[float]
-    status: str
-
-    model_config = {"from_attributes": True}
-
-
-class LogsResponse(BaseModel):
-    total: int
-    page: int
-    page_size: int
-    results: list[LogEntry]
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-@app.get("/", include_in_schema=False)
-async def serve_frontend():
-    """Serve the chat UI at the root URL."""
-    return FileResponse("static/index.html")
-
-
-@app.post("/chat", response_model=ChatResponse, summary="Send a message to the bot")
-async def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    """
-    Accepts a plain-text user message and returns the bot's reply.
-
-    - Runs the NLP engine (FAQ lookup → DistilBERT → fallback).
-    - Logs every interaction to SQLite automatically.
-    - Returns the answer, confidence score, resolution source, and DB log ID.
-    """
-    bot_reply = nlp.answer(request.message)
-
-    status = "fallback" if bot_reply.source == "fallback" else "answered"
-
-    # Persist to DB regardless of whether the bot answered or escalated
-    entry = log_interaction(
-        db=db,
-        user_query=request.message,
-        bot_response=bot_reply.answer,
-        confidence_score=bot_reply.confidence,
-        status=status,
+# ==========================================================
+# Launch Configuration
+# ==========================================================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    print(f"Starting Gradio server on 0.0.0.0:{port}...")
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=port,
     )
-
-    return ChatResponse(
-        reply=bot_reply.answer,
-        confidence=bot_reply.confidence,
-        source=bot_reply.source,
-        status=status,
-        log_id=entry.id,
-    )
-
-
-@app.get("/logs", response_model=LogsResponse, summary="Retrieve interaction logs")
-async def get_logs(
-    page: int = Query(1, ge=1, description="Page number (1-based)"),
-    page_size: int = Query(20, ge=1, le=100, description="Rows per page"),
-    status: Optional[str] = Query(None, description="Filter by status: 'answered' or 'fallback'"),
-    db: Session = Depends(get_db),
-):
-    """
-    Returns paginated interaction logs, optionally filtered by status.
-
-    Useful for reviewing bot performance, detecting coverage gaps, and
-    auditing all conversations for compliance.
-    """
-    query = db.query(InteractionLog).order_by(InteractionLog.timestamp.desc())
-
-    if status:
-        if status not in ("answered", "fallback"):
-            raise HTTPException(status_code=400, detail="status must be 'answered' or 'fallback'")
-        query = query.filter(InteractionLog.status == status)
-
-    total = query.count()
-    results = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    return LogsResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        results=results,
-    )
-
-
-@app.get("/health", summary="Health check")
-async def health():
-    """Simple liveness probe — returns 200 when the server is up."""
-    return {"status": "ok"}
